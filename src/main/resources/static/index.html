@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Live Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.0/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #chat-container { width: 400px; border: 1px solid #ccc; padding: 10px; }
+        #chat-messages { height: 300px; overflow-y: scroll; border-bottom: 1px solid #eee; margin-bottom: 10px; }
+        .message { margin-bottom: 5px; }
+        .message strong { color: #333; }
+        .message .time { font-size: 0.8em; color: #999; margin-left: 5px; }
+        #message-input { width: calc(100% - 70px); padding: 5px; }
+        #send-button { width: 60px; padding: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Live Chat</h1>
+    <div id="chat-container">
+        <div id="chat-messages"></div>
+        <input type="text" id="username-input" placeholder="Enter your username" />
+        <button id="connect-button">Connect</button>
+        <br/><br/>
+        <input type="text" id="message-input" placeholder="Type your message..." disabled />
+        <button id="send-button" disabled>Send</button>
+    </div>
+
+    <script>
+        var stompClient = null;
+        var username = null;
+
+        function connect() {
+            username = document.getElementById('username-input').value.trim();
+            if (username) {
+                document.getElementById('username-input').disabled = true;
+                document.getElementById('connect-button').disabled = true;
+
+                var socket = new SockJS('/ws');
+                stompClient = Stomp.over(socket);
+
+                stompClient.connect({}, onConnected, onError);
+            }
+        }
+
+        function onConnected() {
+            document.getElementById('message-input').disabled = false;
+            document.getElementById('send-button').disabled = false;
+
+            // Subscribe to the Public Topic
+            stompClient.subscribe('/topic/public', onMessageReceived);
+
+            // Tell your username to the server
+            stompClient.send("/app/chat.addUser", {}, JSON.stringify({sender: username, type: 'JOIN'}));
+        }
+
+        function onError(error) {
+            var chatMessages = document.getElementById('chat-messages');
+            var errorMessage = document.createElement('p');
+            errorMessage.style.color = 'red';
+            errorMessage.textContent = 'Could not connect to WebSocket server. Please refresh this page to try again!';
+            chatMessages.appendChild(errorMessage);
+        }
+
+        function sendMessage() {
+            var messageContent = document.getElementById('message-input').value.trim();
+            if (messageContent && stompClient) {
+                var chatMessage = {
+                    sender: username,
+                    content: messageContent,
+                    type: 'CHAT'
+                };
+                stompClient.send("/app/chat.sendMessage", {}, JSON.stringify(chatMessage));
+                document.getElementById('message-input').value = '';
+            }
+        }
+
+        function onMessageReceived(payload) {
+            var message = JSON.parse(payload.body);
+            var chatMessages = document.getElementById('chat-messages');
+            var messageElement = document.createElement('div');
+            messageElement.classList.add('message');
+
+            if (message.type === 'JOIN') {
+                messageElement.innerHTML = `<span style="color: green;">${message.sender} joined!</span> <span class="time">${message.time}</span>`;
+            } else if (message.type === 'LEAVE') {
+                messageElement.innerHTML = `<span style="color: orange;">${message.sender} left!</span> <span class="time">${message.time}</span>`;
+            } else {
+                messageElement.innerHTML = `<strong>${message.sender}</strong> <span class="time">${message.time}</span>: ${message.content}`;
+            }
+            chatMessages.appendChild(messageElement);
+            chatMessages.scrollTop = chatMessages.scrollHeight; // Auto-scroll to the latest message
+        }
+
+        document.getElementById('connect-button').addEventListener('click', connect);
+        document.getElementById('send-button').addEventListener('click', sendMessage);
+        document.getElementById('message-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
