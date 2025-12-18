@@ -31,11 +31,30 @@
         var stompClient = null;
         var username = null;
 
+        // 페이지 로드 시 실행: 저장된 이름이 있으면 자동 연결
+        window.onload = function() {
+            var savedName = sessionStorage.getItem('chat_username');
+
+            if (savedName) {
+                document.getElementById('username-input').value = savedName;
+
+                fetchHistory();
+
+                connect(); // 자동 연결 시도
+            }
+        };
+
         function connect() {
-            username = document.getElementById('username-input').value.trim();
-            if (username) {
+            var inputName = document.getElementById('username-input').value.trim();
+
+            if (inputName) {
+                username = inputName;
+                // [핵심 2] 이름을 브라우저 저장소에 저장 (새로고침 시 유지용)
+                sessionStorage.setItem('chat_username', username);
                 document.getElementById('username-input').disabled = true;
                 document.getElementById('connect-button').disabled = true;
+
+                fetchHistory();
 
                 var socket = new SockJS('/ws');
                 stompClient = Stomp.over(socket);
@@ -53,6 +72,23 @@
 
             // Tell your username to the server
             stompClient.send("/app/chat.addUser", {}, JSON.stringify({sender: username, type: 'JOIN'}));
+        }
+
+        // 이전 채팅 내역을 가져와서 화면에 뿌려주는 함수
+        function fetchHistory() {
+            fetch('/history')
+                .then(response => response.json())
+                .then(messages => {
+                    var chatMessages = document.getElementById('chat-messages');
+                    chatMessages.innerHTML = "";
+                    // 기존 메시지 클리어 방지 (중복 방지 로직이 필요할 수도 있음)
+                    // 여기서는 단순히 순서대로 추가
+                    messages.forEach(message => {
+                        // 기존 onMessageReceived 로직을 재활용하되, 화면에 그리는 부분만 분리하면 좋음.
+                        // 여기서는 간단히 직접 그리기 구현
+                        displayMessage(message);
+                    });
+                }).catch(err => console.error("Failed to fetch history:", err));
         }
 
         function onError(error) {
@@ -78,6 +114,11 @@
 
         function onMessageReceived(payload) {
             var message = JSON.parse(payload.body);
+            displayMessage(message);
+        }
+
+        // 메시지 그리는 부분을 함수로 분리 (history와 실시간 수신 모두 사용)
+        function displayMessage(message) {
             var chatMessages = document.getElementById('chat-messages');
             var messageElement = document.createElement('div');
             messageElement.classList.add('message');
@@ -87,10 +128,12 @@
             } else if (message.type === 'LEAVE') {
                 messageElement.innerHTML = `<span style="color: orange;">${message.sender} left!</span> <span class="time">${message.time}</span>`;
             } else {
-                messageElement.innerHTML = `<strong>${message.sender}</strong> <span class="time">${message.time}</span>: ${message.content}`;
+                // 본인 메시지와 타인 메시지 구분하고 싶으면 여기서 username 비교
+                var isMe = (message.sender === username) ? "(Me)" : "";
+                messageElement.innerHTML = `<strong>${message.sender} ${isMe}</strong> <span class="time">${message.time}</span>: ${message.content}`;
             }
             chatMessages.appendChild(messageElement);
-            chatMessages.scrollTop = chatMessages.scrollHeight; // Auto-scroll to the latest message
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
         document.getElementById('connect-button').addEventListener('click', connect);
