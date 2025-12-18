@@ -1,39 +1,50 @@
 package com.ssg.livechat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.connection.Message;
+import org.springframework.data.redis.connection.MessageListener;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.stereotype.Service;
 
 @Service
-public class RedisSubscriber {
+public class RedisSubscriber implements MessageListener {
 
-    private static final Logger logger = LoggerFactory.getLogger(RedisSubscriber.class);
-    private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
+    private final RedisTemplate<String, Object> redisTemplate;
+    private final SimpMessageSendingOperations messagingTemplate;
 
-    public RedisSubscriber(SimpMessagingTemplate messagingTemplate, ObjectMapper objectMapper) {
-        this.messagingTemplate = messagingTemplate;
+    public RedisSubscriber(ObjectMapper objectMapper, RedisTemplate<String, Object> redisTemplate, SimpMessageSendingOperations messagingTemplate) {
         this.objectMapper = objectMapper;
+        this.redisTemplate = redisTemplate;
+        this.messagingTemplate = messagingTemplate;
     }
 
-    /**
-     * Redis에서 메시지가 발행(Publish)되면 대기하고 있던 onMessage가 해당 메시지를 받아 처리한다.
-     * 여기서 메시지는 "String(JSON 문자열)"로 들어옵니다.
-     */
-    public void receiveMessage(String message) {
+    @Override
+    public void onMessage(Message message, byte[] pattern) {
         try {
-            // 1. 들어온 JSON 문자열을 ChatMessage 객체로 변환 (역직렬화)
-            ChatMessage chatMessage = objectMapper.readValue(message, ChatMessage.class);
+            // 1. Redis에서 온 메시지(JSON String)를 가져옴
+            String publishMessage = (String) redisTemplate.getStringSerializer().deserialize(message.getBody());
 
-            logger.info("Received message from Redis: {}", chatMessage.getContent());
+            // 2. JSON String을 ChatMessage 객체로 변환
+            ChatMessage roomMessage = objectMapper.readValue(publishMessage, ChatMessage.class);
 
-            // 2. 채팅방(WebSocket)에 있는 클라이언트들에게 메시지 전달
-            messagingTemplate.convertAndSend("/topic/public", chatMessage);
+            // 3. 로그 출력 (null 대신 정확한 정보를 출력)
+            if (roomMessage.getType() == ChatMessage.MessageType.CHAT) {
+                System.out.println("[CHAT] 방(" + roomMessage.getRoomId() + "): " + roomMessage.getContent());
+            } else if (roomMessage.getType() == ChatMessage.MessageType.CREATE) {
+                System.out.println("[CREATE] 새 방송 생성됨: " + roomMessage.getRoomId());
+            } else if (roomMessage.getType() == ChatMessage.MessageType.JOIN) {
+                System.out.println("[JOIN] 입장: " + roomMessage.getSender() + " -> " + roomMessage.getRoomId());
+            } else {
+                System.out.println("[OTHER] " + roomMessage.getType());
+            }
+
+            // 4. 구독자들(웹소켓 연결된 클라이언트들)에게 메시지 전달
+            messagingTemplate.convertAndSend("/topic/public", roomMessage);
 
         } catch (Exception e) {
-            logger.error("Exception in RedisSubscriber", e);
+            System.err.println("❌ Redis 메시지 처리 중 오류 발생: " + e.getMessage());
         }
     }
 }
