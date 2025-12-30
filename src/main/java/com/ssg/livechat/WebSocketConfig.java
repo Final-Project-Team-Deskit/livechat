@@ -8,18 +8,18 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 
 @Configuration
 @EnableWebSocketMessageBroker
-public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer { // stomp 설정
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
-        config.enableSimpleBroker("/topic");
-        // 서버가 클라이언트 한테 보낼때
-        config.setApplicationDestinationPrefixes("/app");
+        config.enableSimpleBroker("/sub"); // 구독 경로
+        config.setApplicationDestinationPrefixes("/pub"); // 발행 경로
         //클라이언트가 서버한테 보낼때
     }
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws").withSockJS(); // WebSocket endpoint with SockJS fallback
+        // 클라이언트에서 연결할 엔드포인트: /ws
+        registry.addEndpoint("/ws").setAllowedOriginPatterns("*").withSockJS();
     }
 }

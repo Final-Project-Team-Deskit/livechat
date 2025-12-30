@@ -1,79 +1,53 @@
 package com.ssg.livechat;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.simp.SimpMessageSendingOperations;
 import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
-@Controller
+@RestController // REST API와 WebSocket 처리를 위해 RestController/Controller 혼합 사용 가능
+@RequiredArgsConstructor
 public class ChatController {
 
-    private final RedisPublisher redisPublisher;
-    private final RedisTemplate<String, Object> redisTemplate; // 채팅 내역(JSON) 저장용
-    private final StringRedisTemplate stringRedisTemplate;     // [추가] 방 목록(String) 저장용
+    private final SimpMessageSendingOperations messagingTemplate;
+    private final ChatService chatService;
 
-    // 생성자에 StringRedisTemplate 추가
-    public ChatController(RedisPublisher redisPublisher,
-                          RedisTemplate<String, Object> redisTemplate,
-                          StringRedisTemplate stringRedisTemplate) {
-        this.redisPublisher = redisPublisher;
-        this.redisTemplate = redisTemplate;
-        this.stringRedisTemplate = stringRedisTemplate;
+    /* [REST API] 1. 테스트용 방 생성 */
+    // 판매자 연동 전까지 브라우저에서 방을 생성하기 위한 용도
+    @PostMapping("/api/chat/room")
+    public Long createRoom(@RequestBody Map<String, String> params) {
+        String name = params.get("name");
+        return chatService.createTestRoom(name);
     }
 
-    // 1. 방 목록 불러오기 (StringRedisTemplate 사용)
-    @GetMapping("/rooms")
-    @ResponseBody
-    public Set<String> getActiveRooms() {
-        // 단순 문자열 처리에 특화된 template을 사용하므로 에러가 나지 않습니다.
-        return stringRedisTemplate.opsForSet().members("active_rooms");
+    /* [REST API] 2. 전체 방 목록 조회 */
+    // 현재 생성된 방송 번호(broadcast_id) 목록을 가져옴
+    @GetMapping("/api/chat/rooms")
+    public Set<Long> getRoomList() {
+        return chatService.findAllRooms();
     }
 
-    // 2. 방송 생성 알림 & 방 저장
-    @MessageMapping("/chat.create")
-    public void createRoom(@Payload ChatMessage chatMessage) {
-        // 방 이름을 StringRedisTemplate으로 저장
-        stringRedisTemplate.opsForSet().add("active_rooms", chatMessage.getRoomId());
+    /* [STOMP] 3. 채팅 메시지 처리 */
+    @MessageMapping("/chat/message")
+    public void handleMessage(ChatMessageDTO message) {
+        // 1. 금칙어 필터링
+        String filtered = chatService.filterContent(message.getContent());
+        message.setContent(filtered);
 
-        chatMessage.setType(ChatMessage.MessageType.CREATE);
-        chatMessage.setTime(LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm")));
+        // 2. DB 비동기 저장 (유저님 요청사항)
+        chatService.saveMessageAsync(message);
 
-        redisPublisher.publish("chatroom", chatMessage);
-    }
-
-    // 3. 메시지 전송
-    @MessageMapping("/chat.sendMessage")
-    public void sendMessage(@Payload ChatMessage chatMessage) {
-        chatMessage.setTime(LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm")));
-
-        String historyKey = "chat_history:" + chatMessage.getRoomId();
-        redisTemplate.opsForList().rightPush(historyKey, chatMessage);
-        redisTemplate.opsForList().trim(historyKey, -200, -1);
-
-        redisPublisher.publish("chatroom", chatMessage);
-    }
-
-    // 4. 입장 알림
-    @MessageMapping("/chat.addUser")
-    public void addUser(@Payload ChatMessage chatMessage) {
-        chatMessage.setType(ChatMessage.MessageType.JOIN);
-        chatMessage.setTime(LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm")));
-        redisPublisher.publish("chatroom", chatMessage);
-    }
-
-    // 5. 채팅 내역 불러오기 (기존 유지)
-    @GetMapping("/history/{roomId}")
-    @ResponseBody
-    public List<Object> getChatHistory(@PathVariable String roomId) {
-        return redisTemplate.opsForList().range("chat_history:" + roomId, -50, -1);
+        // 3. 실시간 전파 (/sub/chat/{broadcastId})
+        messagingTemplate.convertAndSend("/sub/chat/" + message.getBroadcastId(), message);
     }
 }
